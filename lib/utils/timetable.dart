@@ -7,6 +7,7 @@ import 'package:just_another_workout_timer/utils/tts_helper.dart';
 import 'workout.dart';
 import 'package:prefs/prefs.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+import 'workout_service.dart';
 
 import '../generated/l10n.dart';
 
@@ -251,10 +252,14 @@ class Timetable with ChangeNotifier {
     });
   }
 
-  void timerStart() {
+  void timerStart() async {
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       _timerTick();
     });
+
+    // Start background service for notifications
+    await WorkoutService.startService();
+
     notifyListeners();
   }
 
@@ -267,11 +272,46 @@ class Timetable with ChangeNotifier {
     } else if (currentSecond > 10 && Prefs.getBool('ticks')) {
       SoundHelper.playBeepTick();
     }
+
+    // Update notification with current workout state
+    _updateNotification();
+
     notifyListeners();
   }
 
-  void timerStop() {
+  /// Update the notification with current workout progress
+  void _updateNotification() {
+    if (currentSecond > 0 && !workoutDone) {
+      // Find current set index and rep
+      int setIndex = _workout.sets.indexOf(currentSet) + 1;
+      int totalSets = _workout.sets.length;
+
+      WorkoutService.updateNotification(
+        exerciseName: currentExercise.name,
+        remainingSeconds: remainingSeconds,
+        currentSet: setIndex,
+        totalSets: totalSets,
+        currentRep: currentReps,
+        totalReps: currentSet.repetitions,
+        isPaused: !isActive,
+      );
+    }
+  }
+
+  void timerStop() async {
     _timer?.cancel();
+
+    // Stop background service if workout is done
+    if (workoutDone) {
+      await WorkoutService.stopService();
+    }
+
     notifyListeners();
+  }
+
+  /// Called when workout is completed or manually stopped
+  void stopWorkout() async {
+    timerStop();
+    await WorkoutService.stopService();
   }
 }

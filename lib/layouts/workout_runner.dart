@@ -4,10 +4,12 @@ import 'package:prefs/prefs.dart';
 import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../generated/l10n.dart';
 import '../utils/utils.dart';
 import '../utils/workout.dart';
+import '../utils/workout_service.dart';
 
 class WorkoutPage extends StatelessWidget {
   final Workout workout;
@@ -51,7 +53,7 @@ class WorkoutPageState extends State<WorkoutPageContent> {
 
   @override
   void dispose() {
-    timetable.timerStop();
+    timetable.stopWorkout();
     WakelockPlus.disable();
     super.dispose();
   }
@@ -64,9 +66,45 @@ class WorkoutPageState extends State<WorkoutPageContent> {
     timetable.itemScrollController = _itemScrollController;
     if (Prefs.getBool('wakelock', true)) WakelockPlus.enable();
 
+    // Initialize workout service and request notification permission
+    _initializeWorkoutService();
+
+    // Set up notification action callbacks
+    WorkoutService.setNotificationActionCallback(_handleNotificationAction);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       timetable.buildTimetable();
     });
+  }
+
+  Future<void> _initializeWorkoutService() async {
+    await WorkoutService.initialize();
+
+    // Request notification permission for Android 13+
+    final notificationPlugin = FlutterLocalNotificationsPlugin();
+    await notificationPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.requestNotificationsPermission();
+  }
+
+  void _handleNotificationAction(String action) {
+    switch (action) {
+      case 'play':
+      case 'pause':
+        if (timetable.isActive) {
+          timetable.timerStop();
+        } else {
+          timetable.timerStart();
+        }
+        break;
+      case 'stop':
+        timetable.stopWorkout();
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+        break;
+    }
   }
 
   Widget _buildCurrentSetList(Set? set) {
