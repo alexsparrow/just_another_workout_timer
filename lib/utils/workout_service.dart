@@ -96,8 +96,11 @@ class WorkoutService {
       notificationTitle: 'Workout Timer',
       notificationText: 'Starting workout...',
       notificationIcon: null,
-      notificationButtons: [],
-      callback: _startCallback,
+      notificationButtons: [
+        const NotificationButton(id: 'pause', text: 'Pause'),
+        const NotificationButton(id: 'stop', text: 'Stop'),
+      ],
+      callback: startWorkoutCallback,
     );
 
     // Assume service started successfully if no exception thrown
@@ -115,7 +118,6 @@ class WorkoutService {
 
     // Assume service stopped successfully if no exception thrown
     _isRunning = false;
-    await _notifications.cancel(_notificationId);
     return true;
   }
 
@@ -137,64 +139,32 @@ class WorkoutService {
     final seconds = remainingSeconds % 60;
     final timeStr = '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
 
-    final androidDetails = AndroidNotificationDetails(
-      _channelId,
-      _channelName,
-      channelDescription: 'Workout timer progress',
-      importance: Importance.low,
-      priority: Priority.low,
-      ongoing: true,
-      autoCancel: false,
-      showWhen: false,
-      usesChronometer: false,
-      playSound: false,
-      enableVibration: false,
-      actions: [
-        AndroidNotificationAction(
-          isPaused ? 'play' : 'pause',
-          isPaused ? 'Resume' : 'Pause',
-          showsUserInterface: false,
-        ),
-        const AndroidNotificationAction(
-          'stop',
-          'Stop',
-          showsUserInterface: true,
-        ),
-      ],
-      styleInformation: BigTextStyleInformation(
-        '$exerciseName\nSet $currentSet/$totalSets, Rep $currentRep/$totalReps',
-        contentTitle: 'Workout Timer - $timeStr',
-      ),
-    );
-
-    final notificationDetails = NotificationDetails(android: androidDetails);
-
-    await _notifications.show(
-      _notificationId,
-      'Workout Timer - $timeStr',
-      '$exerciseName\nSet $currentSet/$totalSets, Rep $currentRep/$totalReps',
-      notificationDetails,
-    );
-
-    // Also update foreground task notification
+    // Update the foreground task notification with current workout state
     await FlutterForegroundTask.updateService(
       notificationTitle: 'Workout Timer - $timeStr',
-      notificationText: '$exerciseName - Set $currentSet/$totalSets',
+      notificationText: '$exerciseName\nSet $currentSet/$totalSets, Rep $currentRep/$totalReps',
+      notificationButtons: [
+        NotificationButton(
+          id: isPaused ? 'play' : 'pause',
+          text: isPaused ? 'Resume' : 'Pause',
+        ),
+        const NotificationButton(id: 'stop', text: 'Stop'),
+      ],
     );
-  }
-
-  /// Foreground task callback (runs in isolate)
-  @pragma('vm:entry-point')
-  static void _startCallback() {
-    FlutterForegroundTask.setTaskHandler(_WorkoutTaskHandler());
   }
 
   /// Check if service is currently running
   static bool get isRunning => _isRunning;
 }
 
+/// Foreground task callback (runs in isolate) - MUST be top-level function
+@pragma('vm:entry-point')
+void startWorkoutCallback() {
+  FlutterForegroundTask.setTaskHandler(WorkoutTaskHandler());
+}
+
 /// Task handler that runs in the foreground service isolate
-class _WorkoutTaskHandler extends TaskHandler {
+class WorkoutTaskHandler extends TaskHandler {
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     // Service started
@@ -213,7 +183,10 @@ class _WorkoutTaskHandler extends TaskHandler {
 
   @override
   void onNotificationButtonPressed(String id) {
-    // Notification button actions are handled by the main app
+    // Send button press event to main app
+    FlutterForegroundTask.sendDataToMain({'action': id});
+    // Bring app to foreground
+    FlutterForegroundTask.launchApp();
   }
 
   @override

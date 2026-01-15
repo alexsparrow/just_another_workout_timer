@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import '../generated/l10n.dart';
 import '../utils/utils.dart';
@@ -17,11 +18,13 @@ class WorkoutPage extends StatelessWidget {
   const WorkoutPage({super.key, required this.workout});
 
   @override
-  Widget build(BuildContext context) => ChangeNotifierProvider(
-        create: (context) => Timetable(context, workout),
-        child: Consumer<Timetable>(
-          builder: (context, timetable, child) =>
-              WorkoutPageContent(workout: workout, timetable: timetable),
+  Widget build(BuildContext context) => WithForegroundTask(
+        child: ChangeNotifierProvider(
+          create: (context) => Timetable(context, workout),
+          child: Consumer<Timetable>(
+            builder: (context, timetable, child) =>
+                WorkoutPageContent(workout: workout, timetable: timetable),
+          ),
         ),
       );
 }
@@ -52,13 +55,6 @@ class WorkoutPageState extends State<WorkoutPageContent> {
       ItemPositionsListener.create();
 
   @override
-  void dispose() {
-    timetable.stopWorkout();
-    WakelockPlus.disable();
-    super.dispose();
-  }
-
-  @override
   void initState() {
     super.initState();
     _workout = widget.workout;
@@ -69,23 +65,48 @@ class WorkoutPageState extends State<WorkoutPageContent> {
     // Initialize workout service and request notification permission
     _initializeWorkoutService();
 
-    // Set up notification action callbacks
-    WorkoutService.setNotificationActionCallback(_handleNotificationAction);
+    // Set up notification button listener
+    _setupButtonListener();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       timetable.buildTimetable();
     });
   }
 
-  Future<void> _initializeWorkoutService() async {
-    await WorkoutService.initialize();
+  void _setupButtonListener() {
+    // Listen for button presses from the foreground task
+    FlutterForegroundTask.addTaskDataCallback(_onReceiveTaskData);
+  }
 
-    // Request notification permission for Android 13+
-    final notificationPlugin = FlutterLocalNotificationsPlugin();
-    await notificationPlugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
+  @override
+  void dispose() {
+    FlutterForegroundTask.removeTaskDataCallback(_onReceiveTaskData);
+    timetable.stopWorkout();
+    WakelockPlus.disable();
+    super.dispose();
+  }
+
+  void _onReceiveTaskData(Object data) {
+    if (data is Map && data['action'] != null) {
+      final action = data['action'] as String;
+      _handleNotificationAction(action);
+    }
+  }
+
+  Future<void> _initializeWorkoutService() async {
+    try {
+      await WorkoutService.initialize();
+
+      // Request notification permission for Android 13+
+      final notificationPlugin = FlutterLocalNotificationsPlugin();
+      await notificationPlugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
+    } catch (e) {
+      // Silently handle errors - service will work without permissions
+      // but user won't see notifications
+    }
   }
 
   void _handleNotificationAction(String action) {
@@ -97,6 +118,8 @@ class WorkoutPageState extends State<WorkoutPageContent> {
         } else {
           timetable.timerStart();
         }
+        // Force immediate notification update to reflect new state
+        timetable.forceNotificationUpdate();
         break;
       case 'stop':
         timetable.stopWorkout();

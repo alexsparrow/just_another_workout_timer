@@ -29,11 +29,14 @@ class Timetable with ChangeNotifier {
   Exercise? prevExercise;
   Exercise? nextExercise;
 
-  int remainingSeconds = 10;
+  int remainingSeconds = 10;  // 10 second countdown before workout starts
   int currentSecond = 0;
 
   bool workoutDone = false;
   bool isInitialized = false;
+
+  // Track last notification state to avoid unnecessary updates
+  int _lastNotificationSecond = -1;
 
   /// timestamps of functions to announce current exercise (among other things)
   final Map<int, Function> _timetable = SplayTreeMap();
@@ -237,12 +240,12 @@ class Timetable with ChangeNotifier {
 
       // announce completed workout
       _timetable[currentTime] = () {
-        timerStop();
+        workoutDone = true;
         TTSHelper.speak(S.of(_context).workoutComplete);
 
-        workoutDone = true;
         currentExercise =
             Exercise(name: S.of(_context).workoutComplete, duration: 1);
+        timerStop();  // Stop after setting workoutDone so service stops properly
         notifyListeners();
       };
 
@@ -258,7 +261,11 @@ class Timetable with ChangeNotifier {
     });
 
     // Start background service for notifications
-    await WorkoutService.startService();
+    try {
+      await WorkoutService.startService();
+    } catch (e) {
+      // Silently handle errors - timer will still work without background service
+    }
 
     notifyListeners();
   }
@@ -282,20 +289,41 @@ class Timetable with ChangeNotifier {
   /// Update the notification with current workout progress
   void _updateNotification() {
     if (currentSecond > 0 && !workoutDone) {
-      // Find current set index and rep
-      int setIndex = _workout.sets.indexOf(currentSet) + 1;
-      int totalSets = _workout.sets.length;
+      // Update notification every 2 seconds or when there's a timetable event
+      // This balances responsiveness with reducing flickering
+      bool shouldUpdate = _lastNotificationSecond != currentSecond &&
+          (currentSecond % 2 == 0 || _timetable.containsKey(currentSecond));
 
-      WorkoutService.updateNotification(
-        exerciseName: currentExercise.name,
-        remainingSeconds: remainingSeconds,
-        currentSet: setIndex,
-        totalSets: totalSets,
-        currentRep: currentReps,
-        totalReps: currentSet.repetitions,
-        isPaused: !isActive,
-      );
+      if (shouldUpdate) {
+        _performNotificationUpdate();
+      }
     }
+  }
+
+  /// Force an immediate notification update (used when pause/play button is pressed)
+  void forceNotificationUpdate() {
+    if (currentSecond > 0 && !workoutDone) {
+      _performNotificationUpdate();
+    }
+  }
+
+  /// Actually perform the notification update
+  void _performNotificationUpdate() {
+    _lastNotificationSecond = currentSecond;
+
+    // Find current set index and rep
+    int setIndex = _workout.sets.indexOf(currentSet) + 1;
+    int totalSets = _workout.sets.length;
+
+    WorkoutService.updateNotification(
+      exerciseName: currentExercise.name,
+      remainingSeconds: remainingSeconds,
+      currentSet: setIndex,
+      totalSets: totalSets,
+      currentRep: currentReps,
+      totalReps: currentSet.repetitions,
+      isPaused: !isActive,
+    );
   }
 
   void timerStop() async {
